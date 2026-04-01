@@ -120,8 +120,13 @@ Add these before submission:
 
 These are good candidates for demo data because they commonly work better than sites like Google in iframes:
 
-- https://example.com
 - https://developer.mozilla.org
 - https://httpbin.org
 - https://quotes.toscrape.com
 - https://books.toscrape.com
+
+## Screenshot
+<img width="1901" height="943" alt="image" src="https://github.com/user-attachments/assets/c596b12f-14f6-48eb-ab02-2f892383a248" />
+<img width="1900" height="944" alt="Screenshot 2026-04-01 170230" src="https://github.com/user-attachments/assets/8f3551d1-3f0a-434d-ae67-e11ab1c0648f" />
+
+
