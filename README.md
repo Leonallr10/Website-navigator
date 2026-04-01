@@ -143,3 +143,6 @@ These are good candidates for demo data because they commonly work better than s
 
 ## Demo video 
 
+## Demo video
+
+<video src="./sample-data/Website%20Navigator%20-%20demo.mp4" controls width="100%"></video>

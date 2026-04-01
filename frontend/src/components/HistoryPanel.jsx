@@ -27,7 +27,7 @@ function HistoryPanel({
       <div className="history-header">
         <div>
           <h2>Saved History</h2>
-          <p className="history-subtitle">Reopen previous uploads saved in MongoDB.</p>
+          <p className="history-subtitle">Reopen previous uploads.</p>
         </div>
         <button className="history-refresh-button" onClick={onReload} disabled={isLoading}>
           {isLoading ? "Refreshing..." : "Refresh"}
