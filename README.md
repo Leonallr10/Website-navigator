@@ -137,6 +137,9 @@ These are good candidates for demo data because they commonly work better than s
 - https://books.toscrape.com
 
 ## Screenshot
-<img width="1901" height="943" alt="image" src="https://github.com/user-attachments/assets/c596b12f-14f6-48eb-ab02-2f892383a248" />
-<img width="1900" height="944" alt="Screenshot 2026-04-01 170230" src="https://github.com/user-attachments/assets/8f3551d1-3f0a-434d-ae67-e11ab1c0648f" />
+<img width="1897" height="947" alt="image" src="https://github.com/user-attachments/assets/0fcaa709-a28d-4433-a8e7-4389919e5c8c" />
+
+<img width="1897" height="941" alt="image" src="https://github.com/user-attachments/assets/cc31079b-c256-4c8f-b4e7-27b2a8ecc932" />
+
+## Demo video 
 
