@@ -143,4 +143,4 @@ These are good candidates for demo data because they commonly work better than s
 
 ## Demo video 
 
-<video src="./sample-data/Website%20Navigator%20-%20demo.mp4" controls width="100%"></video>
+https://github.com/Leonallr10/Website-navigator/raw/main/sample-data/Website%20Navigator%20-%20demo.mp4
