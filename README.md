@@ -14,6 +14,7 @@ The app follows the PRD flow:
 - Proxy website rendering through the backend to improve support for sites that block direct iframe embedding
 - Navigate through websites with Previous and Next buttons
 - Provide a fallback link for websites that block iframe embedding
+- Save uploaded URL sessions in MongoDB and reopen them later
 
 ## Folder Structure
 
@@ -52,6 +53,7 @@ website-nav/
 - Navigate through the uploaded URL list
 - Responsive layout for desktop and mobile
 - Backend proxy route for iframe rendering
+- MongoDB-backed URL history
 - Fallback "Open in new tab" link for iframe-blocked websites
 
 ## Setup
@@ -65,6 +67,15 @@ npm run dev
 ```
 
 The backend runs on `http://localhost:5000`.
+
+Optional MongoDB setup:
+
+```bash
+mongod
+```
+
+By default the backend connects to `mongodb://127.0.0.1:27017/website-navigator`.
+You can override that with `MONGODB_URI`.
 
 ### 2. Frontend
 
@@ -98,7 +109,7 @@ You can use the sample CSV in [sample-data/websites.csv](./sample-data/websites.
 - The parser primarily expects a `URL` column and also accepts common variants like `Url`, `url`, `Website`, and `Link`.
 - Some websites will not render in an iframe because of `X-Frame-Options` or `Content-Security-Policy`.
 - The backend proxy improves compatibility for some blocked sites, but complex apps can still break because of CSP, client-side routing, anti-bot protections, or absolute asset behavior.
-- MongoDB history is optional and is not implemented in this version.
+- MongoDB history is optional, and if MongoDB is unavailable the rest of the app still works but history endpoints return an unavailable message.
 
 ## Screenshots
 
@@ -128,5 +139,4 @@ These are good candidates for demo data because they commonly work better than s
 ## Screenshot
 <img width="1901" height="943" alt="image" src="https://github.com/user-attachments/assets/c596b12f-14f6-48eb-ab02-2f892383a248" />
 <img width="1900" height="944" alt="Screenshot 2026-04-01 170230" src="https://github.com/user-attachments/assets/8f3551d1-3f0a-434d-ae67-e11ab1c0648f" />
-
 

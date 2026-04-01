@@ -1,18 +1,54 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import axios from "axios";
 import Navbar from "./components/Navbar";
 import FileUpload from "./components/FileUpload";
 import WebViewer from "./components/WebViewer";
 import NavButtons from "./components/NavButtons";
+import HistoryPanel from "./components/HistoryPanel";
+
+const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
 
 function App() {
   const [urls, setUrls] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [fileName, setFileName] = useState("");
+  const [historySessions, setHistorySessions] = useState([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+
+  const loadHistory = async () => {
+    try {
+      setHistoryLoading(true);
+      setHistoryError("");
+
+      const response = await axios.get(`${API_BASE_URL}/history`);
+      setHistorySessions(response.data.sessions || []);
+    } catch (error) {
+      setHistorySessions([]);
+      setHistoryError(
+        error.response?.data?.message ||
+          "Unable to load saved history. Check your MongoDB connection."
+      );
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadHistory();
+  }, []);
 
   const handleUploadSuccess = ({ urls: uploadedUrls, fileName: uploadedFileName }) => {
     setUrls(uploadedUrls);
     setCurrentIndex(0);
     setFileName(uploadedFileName);
+    loadHistory();
+  };
+
+  const handleOpenSession = (session) => {
+    setUrls(session.urls || []);
+    setCurrentIndex(0);
+    setFileName(session.fileName || "Saved session");
   };
 
   const handlePrev = () => {
@@ -74,6 +110,14 @@ function App() {
             <WebViewer currentUrl={currentUrl} />
           </div>
         </section>
+
+        <HistoryPanel
+          sessions={historySessions}
+          isLoading={historyLoading}
+          error={historyError}
+          onReload={loadHistory}
+          onOpenSession={handleOpenSession}
+        />
       </main>
     </div>
   );

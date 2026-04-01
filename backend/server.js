@@ -6,12 +6,17 @@ const fs = require("fs");
 const fsp = require("fs/promises");
 const http = require("http");
 const https = require("https");
+const zlib = require("zlib");
+const mongoose = require("mongoose");
 const csvParser = require("csv-parser");
 const xlsx = require("xlsx");
+const UrlList = require("./models/UrlList");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/website-navigator";
 const uploadsDir = path.join(__dirname, "uploads");
+let isMongoConnected = false;
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -19,6 +24,25 @@ if (!fs.existsSync(uploadsDir)) {
 
 app.use(cors());
 app.use(express.json());
+
+mongoose
+  .connect(MONGODB_URI)
+  .then(() => {
+    isMongoConnected = true;
+    console.log("Connected to MongoDB");
+  })
+  .catch((error) => {
+    isMongoConnected = false;
+    console.warn(`MongoDB connection failed: ${error.message}`);
+  });
+
+mongoose.connection.on("connected", () => {
+  isMongoConnected = true;
+});
+
+mongoose.connection.on("disconnected", () => {
+  isMongoConnected = false;
+});
 
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
@@ -145,7 +169,58 @@ function inspectFramePolicy(headers) {
   };
 }
 
-function requestUrl(targetUrl, redirectCount = 0, includeBody = false) {
+function getClientIp(req) {
+  return (
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.socket?.remoteAddress ||
+    ""
+  );
+}
+
+function buildOutgoingHeaders(targetUrl, req, extraHeaders = {}) {
+  const target = new URL(targetUrl);
+
+  return {
+    "user-agent":
+      req.headers["user-agent"] ||
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    accept:
+      req.headers.accept ||
+      "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "accept-language": req.headers["accept-language"] || "en-US,en;q=0.9",
+    "accept-encoding": "gzip, deflate, br",
+    "cache-control": req.headers["cache-control"] || "no-cache",
+    pragma: req.headers.pragma || "no-cache",
+    referer: extraHeaders.referer || `${target.origin}/`,
+    origin: extraHeaders.origin || target.origin,
+    "x-forwarded-for": getClientIp(req),
+    ...extraHeaders,
+  };
+}
+
+function decodeBody(buffer, encoding) {
+  if (!buffer || !encoding) {
+    return buffer;
+  }
+
+  const normalized = String(encoding).toLowerCase();
+
+  if (normalized.includes("gzip")) {
+    return zlib.gunzipSync(buffer);
+  }
+
+  if (normalized.includes("deflate")) {
+    return zlib.inflateSync(buffer);
+  }
+
+  if (normalized.includes("br")) {
+    return zlib.brotliDecompressSync(buffer);
+  }
+
+  return buffer;
+}
+
+function requestUrl(targetUrl, req, redirectCount = 0, requestOptions = {}) {
   return new Promise((resolve, reject) => {
     if (redirectCount > 5) {
       reject(new Error("Too many redirects while fetching the target URL."));
@@ -154,14 +229,15 @@ function requestUrl(targetUrl, redirectCount = 0, includeBody = false) {
 
     const parsedUrl = new URL(targetUrl);
     const client = parsedUrl.protocol === "https:" ? https : http;
+    const method = requestOptions.method || "GET";
+    const includeBody = requestOptions.includeBody !== false;
+    const headers = buildOutgoingHeaders(targetUrl, req, requestOptions.headers);
 
     const request = client.request(
       targetUrl,
       {
-        method: "GET",
-        headers: {
-          "User-Agent": "Website-Navigator/1.0",
-        },
+        method,
+        headers,
       },
       (response) => {
         const statusCode = response.statusCode || 0;
@@ -179,16 +255,30 @@ function requestUrl(targetUrl, redirectCount = 0, includeBody = false) {
         if (statusCode >= 300 && statusCode < 400 && location) {
           response.resume();
           const redirectUrl = new URL(location, targetUrl).toString();
-          resolve(requestUrl(redirectUrl, redirectCount + 1, includeBody));
+          resolve(
+            requestUrl(redirectUrl, req, redirectCount + 1, {
+              ...requestOptions,
+              headers: {
+                ...requestOptions.headers,
+                referer: targetUrl,
+                origin: new URL(redirectUrl).origin,
+              },
+            })
+          );
           return;
         }
 
         response.on("end", () => {
+          const rawBody = includeBody ? Buffer.concat(chunks) : null;
+          const body = includeBody
+            ? decodeBody(rawBody, response.headers["content-encoding"])
+            : null;
+
           resolve({
             finalUrl: targetUrl,
             headers: response.headers,
             statusCode,
-            body: includeBody ? Buffer.concat(chunks) : null,
+            body,
           });
         });
       }
@@ -206,7 +296,7 @@ function buildProxyUrl(targetUrl) {
   return `/proxy?url=${encodeURIComponent(targetUrl)}`;
 }
 
-function shouldProxyNavigation(tagName, attributeName, attributeValue, relValue) {
+function shouldProxyNavigation(tagName, attributeName, relValue) {
   const lowerTagName = tagName.toLowerCase();
   const lowerAttributeName = attributeName.toLowerCase();
   const lowerRelValue = (relValue || "").toLowerCase();
@@ -226,12 +316,126 @@ function shouldProxyNavigation(tagName, attributeName, attributeValue, relValue)
   return false;
 }
 
-function rewriteHtml(html, targetUrl) {
-  const origin = new URL(targetUrl).origin;
+function rewriteCssUrls(cssText, baseUrl) {
+  if (!cssText) {
+    return cssText;
+  }
 
+  let rewrittenCss = cssText.replace(
+    /url\((['"]?)([^'")]+)\1\)/gi,
+    (match, quote = "", assetUrl) => {
+      const trimmedUrl = assetUrl.trim();
+
+      if (
+        !trimmedUrl ||
+        trimmedUrl.startsWith("data:") ||
+        trimmedUrl.startsWith("javascript:") ||
+        trimmedUrl.startsWith("#")
+      ) {
+        return match;
+      }
+
+      const resolvedUrl = new URL(trimmedUrl, baseUrl).toString();
+      return `url(${quote}${buildProxyUrl(resolvedUrl)}${quote})`;
+    }
+  );
+
+  rewrittenCss = rewrittenCss.replace(
+    /@import\s+(url\()?(["']?)([^"')\s]+)\2\)?/gi,
+    (match, hasUrlFn = "", quote = "", importUrl) => {
+      const resolvedUrl = new URL(importUrl, baseUrl).toString();
+      const proxiedUrl = buildProxyUrl(resolvedUrl);
+      return hasUrlFn
+        ? `@import url(${quote}${proxiedUrl}${quote})`
+        : `@import ${quote}${proxiedUrl}${quote}`;
+    }
+  );
+
+  return rewrittenCss;
+}
+
+function rewriteSrcset(srcsetValue, baseUrl) {
+  return srcsetValue
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => {
+      const [assetUrl, descriptor] = entry.split(/\s+/, 2);
+
+      if (!assetUrl || assetUrl.startsWith("data:")) {
+        return entry;
+      }
+
+      const resolvedUrl = new URL(assetUrl, baseUrl).toString();
+      return descriptor
+        ? `${buildProxyUrl(resolvedUrl)} ${descriptor}`
+        : buildProxyUrl(resolvedUrl);
+    })
+    .join(", ");
+}
+
+function injectProxyRuntime(html, baseUrl) {
+  const runtimeScript = `<script>
+    (function () {
+      const proxify = function (value) {
+        try {
+          if (!value) return value;
+          if (value.startsWith("data:") || value.startsWith("javascript:") || value.startsWith("#")) return value;
+          const absolute = new URL(value, ${JSON.stringify(baseUrl)}).toString();
+          return "/proxy?url=" + encodeURIComponent(absolute);
+        } catch (error) {
+          return value;
+        }
+      };
+
+      const originalFetch = window.fetch;
+      if (originalFetch) {
+        window.fetch = function (input, init) {
+          if (typeof input === "string") {
+            return originalFetch.call(this, proxify(input), init);
+          }
+
+          if (input && input.url) {
+            return originalFetch.call(this, proxify(input.url), init);
+          }
+
+          return originalFetch.call(this, input, init);
+        };
+      }
+
+      const originalOpen = XMLHttpRequest.prototype.open;
+      XMLHttpRequest.prototype.open = function (method, url) {
+        const args = Array.prototype.slice.call(arguments);
+        args[1] = proxify(url);
+        return originalOpen.apply(this, args);
+      };
+
+      const originalWindowOpen = window.open;
+      window.open = function (url, target, features) {
+        if (target === "_blank") {
+          return originalWindowOpen.call(window, url, target, features);
+        }
+
+        return originalWindowOpen.call(window, proxify(url), target, features);
+      };
+    })();
+  </script>`;
+
+  return html.replace(/<body([^>]*)>/i, `<body$1>${runtimeScript}`);
+}
+
+function rewriteHtml(html, targetUrl) {
   let rewrittenHtml = html.replace(
     /<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]*>/gi,
     ""
+  );
+
+  rewrittenHtml = rewrittenHtml.replace(
+    /<meta([^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url=)([^"']+)(["'][^>]*)>/gi,
+    (_match, prefix, refreshUrl, suffix) => {
+      const resolvedUrl = new URL(refreshUrl.trim(), targetUrl).toString();
+      return `<meta${prefix}${buildProxyUrl(resolvedUrl)}${suffix}>`;
+    }
   );
 
   if (/<head[^>]*>/i.test(rewrittenHtml)) {
@@ -241,34 +445,54 @@ function rewriteHtml(html, targetUrl) {
     );
   }
 
+  const attributePattern = /(href|src|action|poster|data-src|data-href)=["']([^"'#]+)["']/gi;
+
   rewrittenHtml = rewrittenHtml.replace(
-    /<(a|link|img|script|iframe|source|video|audio|form)\b([^>]*?)\s(href|src|action)=["']([^"'#]+)["']([^>]*)>/gi,
-    (match, tagName, beforeAttrs, attributeName, attributeValue, afterAttrs) => {
-      const trimmedValue = attributeValue.trim();
+    /<(a|link|img|script|iframe|source|video|audio|form|embed|track|input|object)\b([^>]*)>/gi,
+    (match, tagName, attrs) => {
+      const relMatch = attrs.match(/\srel=["']([^"']+)["']/i);
+      let updatedAttrs = attrs.replace(
+        attributePattern,
+        (_attrMatch, attributeName, attributeValue) => {
+          const trimmedValue = attributeValue.trim();
 
-      if (
-        !trimmedValue ||
-        trimmedValue.startsWith("data:") ||
-        trimmedValue.startsWith("mailto:") ||
-        trimmedValue.startsWith("tel:") ||
-        trimmedValue.startsWith("javascript:")
-      ) {
-        return match;
-      }
+          if (
+            !trimmedValue ||
+            trimmedValue.startsWith("data:") ||
+            trimmedValue.startsWith("mailto:") ||
+            trimmedValue.startsWith("tel:") ||
+            trimmedValue.startsWith("javascript:")
+          ) {
+            return `${attributeName}="${trimmedValue}"`;
+          }
 
-      const relMatch = `${beforeAttrs} ${afterAttrs}`.match(/\srel=["']([^"']+)["']/i);
-      const resolvedUrl = new URL(trimmedValue, targetUrl).toString();
-      const replacementValue = shouldProxyNavigation(
-        tagName,
-        attributeName,
-        trimmedValue,
-        relMatch?.[1]
-      )
-        ? buildProxyUrl(resolvedUrl)
-        : resolvedUrl;
+          const resolvedUrl = new URL(trimmedValue, targetUrl).toString();
+          const replacementValue = shouldProxyNavigation(tagName, attributeName, relMatch?.[1])
+            ? buildProxyUrl(resolvedUrl)
+            : buildProxyUrl(resolvedUrl);
 
-      return `<${tagName}${beforeAttrs} ${attributeName}="${replacementValue}"${afterAttrs}>`;
+          return `${attributeName}="${replacementValue}"`;
+        }
+      );
+
+      updatedAttrs = updatedAttrs.replace(
+        /\ssrcset=["']([^"']+)["']/gi,
+        (_srcsetMatch, srcsetValue) => ` srcset="${rewriteSrcset(srcsetValue, targetUrl)}"`
+      );
+
+      updatedAttrs = updatedAttrs.replace(
+        /\sstyle=["']([^"']+)["']/gi,
+        (_styleMatch, styleValue) =>
+          ` style="${rewriteCssUrls(styleValue, targetUrl).replace(/"/g, "&quot;")}"`
+      );
+
+      return `<${tagName}${updatedAttrs}>`;
     }
+  );
+
+  rewrittenHtml = rewrittenHtml.replace(
+    /<style([^>]*)>([\s\S]*?)<\/style>/gi,
+    (_match, styleAttrs, cssText) => `<style${styleAttrs}>${rewriteCssUrls(cssText, targetUrl)}</style>`
   );
 
   rewrittenHtml = rewrittenHtml.replace(
@@ -276,27 +500,14 @@ function rewriteHtml(html, targetUrl) {
     "<$1$2 method=\"get\"$3>"
   );
 
-  rewrittenHtml = rewrittenHtml.replace(
-    /<body([^>]*)>/i,
-    `<body$1><script>
-      window.addEventListener("click", function (event) {
-        const anchor = event.target.closest("a[href]");
-        if (!anchor) return;
-        const href = anchor.getAttribute("href");
-        if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
-        if (anchor.target === "_blank") return;
-        anchor.setAttribute("href", href);
-      });
-    </script>`
-  );
-
-  return rewrittenHtml;
+  return injectProxyRuntime(rewrittenHtml, targetUrl);
 }
 
 function setProxyHeaders(res, headers) {
   const hopByHopHeaders = new Set([
     "connection",
     "content-length",
+    "content-encoding",
     "content-security-policy",
     "content-security-policy-report-only",
     "host",
@@ -321,6 +532,8 @@ function setProxyHeaders(res, headers) {
   });
 
   res.setHeader("X-Frame-Options", "ALLOWALL");
+  res.removeHeader("Content-Security-Policy");
+  res.removeHeader("Content-Security-Policy-Report-Only");
 }
 
 function normalizeUrls(rows) {
@@ -367,7 +580,73 @@ async function parseUploadedFile(filePath, extension) {
 }
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, message: "Website Navigator backend is running." });
+  res.json({
+    ok: true,
+    message: "Website Navigator backend is running.",
+    database: isMongoConnected ? "connected" : "disconnected",
+  });
+});
+
+app.get("/history", async (_req, res) => {
+  if (!isMongoConnected) {
+    res.status(503).json({
+      message: "MongoDB is not connected. URL history is currently unavailable.",
+    });
+    return;
+  }
+
+  try {
+    const sessions = await UrlList.find({})
+      .sort({ uploadedAt: -1 })
+      .select("_id fileName urls uploadedAt")
+      .lean();
+
+    res.json({
+      sessions: sessions.map((session) => ({
+        id: session._id,
+        fileName: session.fileName,
+        total: session.urls.length,
+        urls: session.urls,
+        uploadedAt: session.uploadedAt,
+      })),
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to fetch URL history.",
+      error: error.message,
+    });
+  }
+});
+
+app.get("/history/:id", async (req, res) => {
+  if (!isMongoConnected) {
+    res.status(503).json({
+      message: "MongoDB is not connected. URL history is currently unavailable.",
+    });
+    return;
+  }
+
+  try {
+    const session = await UrlList.findById(req.params.id).lean();
+
+    if (!session) {
+      res.status(404).json({ message: "Saved URL session not found." });
+      return;
+    }
+
+    res.json({
+      id: session._id,
+      fileName: session.fileName,
+      urls: session.urls,
+      total: session.urls.length,
+      uploadedAt: session.uploadedAt,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to fetch the saved URL session.",
+      error: error.message,
+    });
+  }
 });
 
 app.get("/proxy", async (req, res) => {
@@ -379,7 +658,9 @@ app.get("/proxy", async (req, res) => {
   }
 
   try {
-    const result = await requestUrl(targetUrl, 0, true);
+    const result = await requestUrl(targetUrl, req, 0, {
+      includeBody: true,
+    });
     const contentType = result.headers["content-type"] || "application/octet-stream";
 
     setProxyHeaders(res, result.headers);
@@ -390,6 +671,13 @@ app.get("/proxy", async (req, res) => {
       const rewrittenHtml = rewriteHtml(html, result.finalUrl);
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.send(rewrittenHtml);
+      return;
+    }
+
+    if (contentType.includes("text/css")) {
+      const cssText = result.body ? result.body.toString("utf8") : "";
+      res.setHeader("Content-Type", "text/css; charset=utf-8");
+      res.send(rewriteCssUrls(cssText, result.finalUrl));
       return;
     }
 
@@ -409,7 +697,7 @@ app.post("/check-embed", async (req, res) => {
   }
 
   try {
-    const result = await requestUrl(url, 0, false);
+    const result = await requestUrl(url, req, 0, { includeBody: false });
     const policy = inspectFramePolicy(result.headers);
 
     res.json({
@@ -447,10 +735,22 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       return;
     }
 
+    let savedSessionId = null;
+
+    if (isMongoConnected) {
+      const savedSession = await UrlList.create({
+        fileName: req.file.originalname,
+        urls,
+      });
+
+      savedSessionId = savedSession._id;
+    }
+
     res.json({
       urls,
       total: urls.length,
       fileName: req.file.originalname,
+      savedSessionId,
     });
   } catch (error) {
     res.status(500).json({
