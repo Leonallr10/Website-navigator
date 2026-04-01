@@ -649,6 +649,34 @@ app.get("/history/:id", async (req, res) => {
   }
 });
 
+app.delete("/history/:id", async (req, res) => {
+  if (!isMongoConnected) {
+    res.status(503).json({
+      message: "MongoDB is not connected. URL history is currently unavailable.",
+    });
+    return;
+  }
+
+  try {
+    const deletedSession = await UrlList.findByIdAndDelete(req.params.id).lean();
+
+    if (!deletedSession) {
+      res.status(404).json({ message: "Saved URL session not found." });
+      return;
+    }
+
+    res.json({
+      message: "Saved URL session deleted successfully.",
+      id: req.params.id,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to delete the saved URL session.",
+      error: error.message,
+    });
+  }
+});
+
 app.get("/proxy", async (req, res) => {
   const targetUrl = req.query.url;
 

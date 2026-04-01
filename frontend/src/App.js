@@ -15,6 +15,8 @@ function App() {
   const [historySessions, setHistorySessions] = useState([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState("");
+  const [activeSessionId, setActiveSessionId] = useState(null);
+  const [deletingSessionId, setDeletingSessionId] = useState("");
 
   const loadHistory = async () => {
     try {
@@ -38,10 +40,15 @@ function App() {
     loadHistory();
   }, []);
 
-  const handleUploadSuccess = ({ urls: uploadedUrls, fileName: uploadedFileName }) => {
+  const handleUploadSuccess = ({
+    urls: uploadedUrls,
+    fileName: uploadedFileName,
+    savedSessionId,
+  }) => {
     setUrls(uploadedUrls);
     setCurrentIndex(0);
     setFileName(uploadedFileName);
+    setActiveSessionId(savedSessionId || null);
     loadHistory();
   };
 
@@ -49,6 +56,36 @@ function App() {
     setUrls(session.urls || []);
     setCurrentIndex(0);
     setFileName(session.fileName || "Saved session");
+    setActiveSessionId(session.id || null);
+  };
+
+  const handleDeleteSession = async (session) => {
+    if (!session?.id) {
+      return;
+    }
+
+    try {
+      setDeletingSessionId(session.id);
+      setHistoryError("");
+
+      await axios.delete(`${API_BASE_URL}/history/${session.id}`);
+
+      if (activeSessionId === session.id) {
+        setUrls([]);
+        setCurrentIndex(0);
+        setFileName("");
+        setActiveSessionId(null);
+      }
+
+      await loadHistory();
+    } catch (error) {
+      setHistoryError(
+        error.response?.data?.message ||
+          "Unable to delete the saved history entry. Please try again."
+      );
+    } finally {
+      setDeletingSessionId("");
+    }
   };
 
   const handlePrev = () => {
@@ -94,10 +131,16 @@ function App() {
               <span>Current URL</span>
               <strong className="url-preview">{currentUrl || "Waiting for upload"}</strong>
             </div>
-            <p className="meta-note">
-              Some websites block iframes for security reasons. If that happens, use the
-              fallback link to open the current site in a new tab.
-            </p>
+            <HistoryPanel
+              sessions={historySessions}
+              isLoading={historyLoading}
+              error={historyError}
+              activeSessionId={activeSessionId}
+              deletingSessionId={deletingSessionId}
+              onReload={loadHistory}
+              onOpenSession={handleOpenSession}
+              onDeleteSession={handleDeleteSession}
+            />
           </div>
 
           <div className="panel panel-viewer">
@@ -110,14 +153,6 @@ function App() {
             <WebViewer currentUrl={currentUrl} />
           </div>
         </section>
-
-        <HistoryPanel
-          sessions={historySessions}
-          isLoading={historyLoading}
-          error={historyError}
-          onReload={loadHistory}
-          onOpenSession={handleOpenSession}
-        />
       </main>
     </div>
   );

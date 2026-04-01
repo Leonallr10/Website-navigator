@@ -12,7 +12,16 @@ function formatUploadedAt(value) {
   return date.toLocaleString();
 }
 
-function HistoryPanel({ sessions, isLoading, error, onReload, onOpenSession }) {
+function HistoryPanel({
+  sessions,
+  isLoading,
+  error,
+  activeSessionId,
+  deletingSessionId,
+  onReload,
+  onOpenSession,
+  onDeleteSession,
+}) {
   return (
     <div className="panel panel-history">
       <div className="history-header">
@@ -33,15 +42,27 @@ function HistoryPanel({ sessions, isLoading, error, onReload, onOpenSession }) {
 
       <div className="history-list">
         {sessions.map((session) => (
-          <article className="history-item" key={session.id}>
-            <div>
+          <article
+            className={`history-item ${activeSessionId === session.id ? "history-item-active" : ""}`}
+            key={session.id}
+          >
+            <div className="history-copy">
               <h3>{session.fileName}</h3>
               <p>{session.total} URL(s)</p>
               <p>{formatUploadedAt(session.uploadedAt)}</p>
             </div>
-            <button className="nav-button" onClick={() => onOpenSession(session)}>
-              Open Session
-            </button>
+            <div className="history-actions">
+              <button className="history-open-button" onClick={() => onOpenSession(session)}>
+                Open
+              </button>
+              <button
+                className="history-delete-button"
+                onClick={() => onDeleteSession(session)}
+                disabled={deletingSessionId === session.id}
+              >
+                {deletingSessionId === session.id ? "Deleting..." : "Delete"}
+              </button>
+            </div>
           </article>
         ))}
       </div>
