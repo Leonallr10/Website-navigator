@@ -6,7 +6,7 @@ import WebViewer from "./components/WebViewer";
 import NavButtons from "./components/NavButtons";
 import HistoryPanel from "./components/HistoryPanel";
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
+const API_BASE_URL = (process.env.REACT_APP_API_URL || "http://localhost:5000").replace(/\/+$/, "");
 
 function App() {
   const [urls, setUrls] = useState([]);
