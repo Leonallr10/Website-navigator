@@ -16,11 +16,20 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/website-navigator";
 const uploadsDir = path.join(__dirname, "uploads");
+let isMongoConnected = false;
+
+function normalizeOrigin(origin) {
+  if (!origin) {
+    return "";
+  }
+
+  return origin.trim().replace(/\/+$/, "");
+}
+
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
-  .map((origin) => origin.trim())
+  .map((origin) => normalizeOrigin(origin))
   .filter(Boolean);
-let isMongoConnected = false;
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
@@ -34,20 +43,29 @@ app.use(
         return;
       }
 
+      const normalizedOrigin = normalizeOrigin(origin);
       const localOrigins = new Set([
         "http://localhost:3000",
         "http://127.0.0.1:3000",
       ]);
 
-      if (localOrigins.has(origin) || allowedOrigins.includes(origin)) {
+      const isAllowedVercelPreview = /\.vercel\.app$/i.test(normalizedOrigin);
+
+      if (
+        allowedOrigins.length === 0 ||
+        localOrigins.has(normalizedOrigin) ||
+        allowedOrigins.includes(normalizedOrigin) ||
+        isAllowedVercelPreview
+      ) {
         callback(null, true);
         return;
       }
 
-      callback(new Error(`Origin ${origin} is not allowed by CORS.`));
+      callback(new Error(`Origin ${normalizedOrigin} is not allowed by CORS.`));
     },
     methods: ["GET", "POST", "DELETE", "OPTIONS"],
     credentials: false,
+    optionsSuccessStatus: 204,
   })
 );
 app.use(express.json());
