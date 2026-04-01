@@ -1,3 +1,5 @@
+const API_BASE_URL = process.env.REACT_APP_API_URL || "http://localhost:5000";
+
 function WebViewer({ currentUrl }) {
   if (!currentUrl) {
     return (
@@ -13,7 +15,7 @@ function WebViewer({ currentUrl }) {
     );
   }
 
-  const proxiedUrl = `http://localhost:5000/proxy?url=${encodeURIComponent(currentUrl)}`;
+  const proxiedUrl = `${API_BASE_URL}/proxy?url=${encodeURIComponent(currentUrl)}`;
 
   return (
     <div className="viewer-frame-wrap">

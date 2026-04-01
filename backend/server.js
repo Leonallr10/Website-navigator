@@ -16,13 +16,40 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/website-navigator";
 const uploadsDir = path.join(__dirname, "uploads");
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 let isMongoConnected = false;
 
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-app.use(cors());
+app.use(
+  cors({
+    origin(origin, callback) {
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      const localOrigins = new Set([
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+      ]);
+
+      if (localOrigins.has(origin) || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error(`Origin ${origin} is not allowed by CORS.`));
+    },
+    methods: ["GET", "POST", "DELETE", "OPTIONS"],
+    credentials: false,
+  })
+);
 app.use(express.json());
 
 mongoose
