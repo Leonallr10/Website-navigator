@@ -1,11 +1,9 @@
 const express = require("express");
 const cors = require("cors");
 const multer = require("multer");
-const path = require("path");
-const fs = require("fs");
-const fsp = require("fs/promises");
 const http = require("http");
 const https = require("https");
+const { Readable } = require("stream");
 const zlib = require("zlib");
 const mongoose = require("mongoose");
 const csvParser = require("csv-parser");
@@ -15,7 +13,6 @@ const UrlList = require("./models/UrlList");
 const app = express();
 const PORT = process.env.PORT || 5000;
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb://127.0.0.1:27017/website-navigator";
-const uploadsDir = path.join(__dirname, "uploads");
 let isMongoConnected = false;
 
 function normalizeOrigin(origin) {
@@ -30,10 +27,6 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS || "")
   .split(",")
   .map((origin) => normalizeOrigin(origin))
   .filter(Boolean);
-
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
 
 app.use(
   cors({
@@ -89,21 +82,14 @@ mongoose.connection.on("disconnected", () => {
   isMongoConnected = false;
 });
 
-const storage = multer.diskStorage({
-  destination: (_req, _file, cb) => {
-    cb(null, uploadsDir);
-  },
-  filename: (_req, file, cb) => {
-    const uniqueSuffix = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-    cb(null, `${uniqueSuffix}-${file.originalname}`);
-  },
-});
-
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+  },
   fileFilter: (_req, file, cb) => {
     const allowedExtensions = [".xlsx", ".xls", ".csv"];
-    const extension = path.extname(file.originalname).toLowerCase();
+    const extension = file.originalname.slice(file.originalname.lastIndexOf(".")).toLowerCase();
 
     if (!allowedExtensions.includes(extension)) {
       cb(new Error("Only .xlsx, .xls, and .csv files are supported."));
@@ -589,8 +575,8 @@ function normalizeUrls(rows) {
     .filter(isValidHttpUrl);
 }
 
-function parseExcelFile(filePath) {
-  const workbook = xlsx.readFile(filePath);
+function parseExcelFile(fileBuffer) {
+  const workbook = xlsx.read(fileBuffer, { type: "buffer" });
   const firstSheetName = workbook.SheetNames[0];
   const firstSheet = workbook.Sheets[firstSheetName];
   const rows = xlsx.utils.sheet_to_json(firstSheet, { defval: "" });
@@ -598,11 +584,11 @@ function parseExcelFile(filePath) {
   return normalizeUrls(rows);
 }
 
-function parseCsvFile(filePath) {
+function parseCsvFile(fileBuffer) {
   return new Promise((resolve, reject) => {
     const rows = [];
 
-    fs.createReadStream(filePath)
+    Readable.from(fileBuffer)
       .pipe(csvParser())
       .on("data", (row) => {
         rows.push(row);
@@ -616,12 +602,12 @@ function parseCsvFile(filePath) {
   });
 }
 
-async function parseUploadedFile(filePath, extension) {
+async function parseUploadedFile(fileBuffer, extension) {
   if (extension === ".csv") {
-    return parseCsvFile(filePath);
+    return parseCsvFile(fileBuffer);
   }
 
-  return parseExcelFile(filePath);
+  return parseExcelFile(fileBuffer);
 }
 
 app.get("/health", (_req, res) => {
@@ -795,11 +781,12 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     return;
   }
 
-  const filePath = req.file.path;
-  const extension = path.extname(req.file.originalname).toLowerCase();
+  const extension = req.file.originalname
+    .slice(req.file.originalname.lastIndexOf("."))
+    .toLowerCase();
 
   try {
-    const urls = await parseUploadedFile(filePath, extension);
+    const urls = await parseUploadedFile(req.file.buffer, extension);
 
     if (urls.length === 0) {
       res.status(400).json({
@@ -830,12 +817,6 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       message: "Failed to parse the uploaded file.",
       error: error.message,
     });
-  } finally {
-    try {
-      await fsp.unlink(filePath);
-    } catch (_cleanupError) {
-      // Ignore cleanup failures for temp uploads.
-    }
   }
 });
 
