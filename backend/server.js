@@ -323,8 +323,8 @@ function requestUrl(targetUrl, req, redirectCount = 0, requestOptions = {}) {
   });
 }
 
-function buildProxyUrl(targetUrl) {
-  return `/proxy?url=${encodeURIComponent(targetUrl)}`;
+function buildProxyUrl(targetUrl, proxyBase = "") {
+  return `${proxyBase}/proxy?url=${encodeURIComponent(targetUrl)}`;
 }
 
 function shouldProxyNavigation(tagName, attributeName, relValue) {
@@ -347,7 +347,7 @@ function shouldProxyNavigation(tagName, attributeName, relValue) {
   return false;
 }
 
-function rewriteCssUrls(cssText, baseUrl) {
+function rewriteCssUrls(cssText, baseUrl, proxyBase = "") {
   if (!cssText) {
     return cssText;
   }
@@ -367,7 +367,7 @@ function rewriteCssUrls(cssText, baseUrl) {
       }
 
       const resolvedUrl = new URL(trimmedUrl, baseUrl).toString();
-      return `url(${quote}${buildProxyUrl(resolvedUrl)}${quote})`;
+      return `url(${quote}${buildProxyUrl(resolvedUrl, proxyBase)}${quote})`;
     }
   );
 
@@ -375,7 +375,7 @@ function rewriteCssUrls(cssText, baseUrl) {
     /@import\s+(url\()?(["']?)([^"')\s]+)\2\)?/gi,
     (match, hasUrlFn = "", quote = "", importUrl) => {
       const resolvedUrl = new URL(importUrl, baseUrl).toString();
-      const proxiedUrl = buildProxyUrl(resolvedUrl);
+      const proxiedUrl = buildProxyUrl(resolvedUrl, proxyBase);
       return hasUrlFn
         ? `@import url(${quote}${proxiedUrl}${quote})`
         : `@import ${quote}${proxiedUrl}${quote}`;
@@ -385,7 +385,7 @@ function rewriteCssUrls(cssText, baseUrl) {
   return rewrittenCss;
 }
 
-function rewriteSrcset(srcsetValue, baseUrl) {
+function rewriteSrcset(srcsetValue, baseUrl, proxyBase = "") {
   return srcsetValue
     .split(",")
     .map((entry) => entry.trim())
@@ -399,13 +399,13 @@ function rewriteSrcset(srcsetValue, baseUrl) {
 
       const resolvedUrl = new URL(assetUrl, baseUrl).toString();
       return descriptor
-        ? `${buildProxyUrl(resolvedUrl)} ${descriptor}`
-        : buildProxyUrl(resolvedUrl);
+        ? `${buildProxyUrl(resolvedUrl, proxyBase)} ${descriptor}`
+        : buildProxyUrl(resolvedUrl, proxyBase);
     })
     .join(", ");
 }
 
-function injectProxyRuntime(html, baseUrl) {
+function injectProxyRuntime(html, baseUrl, proxyBase = "") {
   const runtimeScript = `<script>
     (function () {
       const proxify = function (value) {
@@ -413,7 +413,7 @@ function injectProxyRuntime(html, baseUrl) {
           if (!value) return value;
           if (value.startsWith("data:") || value.startsWith("javascript:") || value.startsWith("#")) return value;
           const absolute = new URL(value, ${JSON.stringify(baseUrl)}).toString();
-          return "/proxy?url=" + encodeURIComponent(absolute);
+          return ${JSON.stringify(proxyBase)} + "/proxy?url=" + encodeURIComponent(absolute);
         } catch (error) {
           return value;
         }
@@ -455,7 +455,7 @@ function injectProxyRuntime(html, baseUrl) {
   return html.replace(/<body([^>]*)>/i, `<body$1>${runtimeScript}`);
 }
 
-function rewriteHtml(html, targetUrl) {
+function rewriteHtml(html, targetUrl, proxyBase = "") {
   let rewrittenHtml = html.replace(
     /<meta[^>]+http-equiv=["']Content-Security-Policy["'][^>]*>/gi,
     ""
@@ -465,7 +465,7 @@ function rewriteHtml(html, targetUrl) {
     /<meta([^>]+http-equiv=["']refresh["'][^>]+content=["'][^"']*url=)([^"']+)(["'][^>]*)>/gi,
     (_match, prefix, refreshUrl, suffix) => {
       const resolvedUrl = new URL(refreshUrl.trim(), targetUrl).toString();
-      return `<meta${prefix}${buildProxyUrl(resolvedUrl)}${suffix}>`;
+      return `<meta${prefix}${buildProxyUrl(resolvedUrl, proxyBase)}${suffix}>`;
     }
   );
 
@@ -499,8 +499,8 @@ function rewriteHtml(html, targetUrl) {
 
           const resolvedUrl = new URL(trimmedValue, targetUrl).toString();
           const replacementValue = shouldProxyNavigation(tagName, attributeName, relMatch?.[1])
-            ? buildProxyUrl(resolvedUrl)
-            : buildProxyUrl(resolvedUrl);
+            ? buildProxyUrl(resolvedUrl, proxyBase)
+            : buildProxyUrl(resolvedUrl, proxyBase);
 
           return `${attributeName}="${replacementValue}"`;
         }
@@ -508,13 +508,13 @@ function rewriteHtml(html, targetUrl) {
 
       updatedAttrs = updatedAttrs.replace(
         /\ssrcset=["']([^"']+)["']/gi,
-        (_srcsetMatch, srcsetValue) => ` srcset="${rewriteSrcset(srcsetValue, targetUrl)}"`
+        (_srcsetMatch, srcsetValue) => ` srcset="${rewriteSrcset(srcsetValue, targetUrl, proxyBase)}"`
       );
 
       updatedAttrs = updatedAttrs.replace(
         /\sstyle=["']([^"']+)["']/gi,
         (_styleMatch, styleValue) =>
-          ` style="${rewriteCssUrls(styleValue, targetUrl).replace(/"/g, "&quot;")}"`
+          ` style="${rewriteCssUrls(styleValue, targetUrl, proxyBase).replace(/"/g, "&quot;")}"`
       );
 
       return `<${tagName}${updatedAttrs}>`;
@@ -523,7 +523,7 @@ function rewriteHtml(html, targetUrl) {
 
   rewrittenHtml = rewrittenHtml.replace(
     /<style([^>]*)>([\s\S]*?)<\/style>/gi,
-    (_match, styleAttrs, cssText) => `<style${styleAttrs}>${rewriteCssUrls(cssText, targetUrl)}</style>`
+    (_match, styleAttrs, cssText) => `<style${styleAttrs}>${rewriteCssUrls(cssText, targetUrl, proxyBase)}</style>`
   );
 
   rewrittenHtml = rewrittenHtml.replace(
@@ -531,7 +531,7 @@ function rewriteHtml(html, targetUrl) {
     "<$1$2 method=\"get\"$3>"
   );
 
-  return injectProxyRuntime(rewrittenHtml, targetUrl);
+  return injectProxyRuntime(rewrittenHtml, targetUrl, proxyBase);
 }
 
 function setProxyHeaders(res, headers) {
@@ -716,6 +716,10 @@ app.get("/proxy", async (req, res) => {
     return;
   }
 
+  const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+  const host = req.headers['x-forwarded-host'] || req.get('host');
+  const proxyBase = `${protocol}://${host}`;
+
   try {
     const result = await requestUrl(targetUrl, req, 0, {
       includeBody: true,
@@ -727,7 +731,7 @@ app.get("/proxy", async (req, res) => {
 
     if (contentType.includes("text/html")) {
       const html = result.body ? result.body.toString("utf8") : "";
-      const rewrittenHtml = rewriteHtml(html, result.finalUrl);
+      const rewrittenHtml = rewriteHtml(html, result.finalUrl, proxyBase);
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.send(rewrittenHtml);
       return;
@@ -736,7 +740,7 @@ app.get("/proxy", async (req, res) => {
     if (contentType.includes("text/css")) {
       const cssText = result.body ? result.body.toString("utf8") : "";
       res.setHeader("Content-Type", "text/css; charset=utf-8");
-      res.send(rewriteCssUrls(cssText, result.finalUrl));
+      res.send(rewriteCssUrls(cssText, result.finalUrl, proxyBase));
       return;
     }
 
