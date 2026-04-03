@@ -56,12 +56,18 @@ app.use(
 
       callback(new Error(`Origin ${normalizedOrigin} is not allowed by CORS.`));
     },
-    methods: ["GET", "POST", "DELETE", "OPTIONS"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     credentials: false,
     optionsSuccessStatus: 204,
   })
 );
-app.use(express.json());
+
+app.use((req, res, next) => {
+  if (req.path === '/proxy') {
+    return next();
+  }
+  express.json()(req, res, next);
+});
 
 mongoose
   .connect(MONGODB_URI)
@@ -319,7 +325,16 @@ function requestUrl(targetUrl, req, redirectCount = 0, requestOptions = {}) {
     request.setTimeout(8000, () => {
       request.destroy(new Error("Timed out while checking iframe support."));
     });
-    request.end();
+
+    if (req && (method === "POST" || method === "PUT" || method === "PATCH" || method === "DELETE") && redirectCount === 0) {
+      req.pipe(request);
+      req.on("error", (err) => {
+        request.destroy(err);
+        reject(err);
+      });
+    } else {
+      request.end();
+    }
   });
 }
 
@@ -708,7 +723,7 @@ app.delete("/history/:id", async (req, res) => {
   }
 });
 
-app.get("/proxy", async (req, res) => {
+app.all("/proxy", async (req, res) => {
   const targetUrl = req.query.url;
 
   if (!targetUrl || !isValidHttpUrl(targetUrl)) {
@@ -722,6 +737,7 @@ app.get("/proxy", async (req, res) => {
 
   try {
     const result = await requestUrl(targetUrl, req, 0, {
+      method: req.method,
       includeBody: true,
     });
     const contentType = result.headers["content-type"] || "application/octet-stream";
