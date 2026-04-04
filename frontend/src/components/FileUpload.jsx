@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "./ui/
 import { Input } from "./ui/input";
 
 const API_BASE_URL = (process.env.REACT_APP_API_URL || "http://localhost:5000").replace(/\/+$/, "");
+console.log("[FileUpload] API_BASE_URL resolved to:", API_BASE_URL);
 const ALLOWED_EXTENSIONS = [".xlsx", ".xls", ".csv"];
 
 function FileUpload({ onUploadSuccess }) {
@@ -64,18 +65,26 @@ function FileUpload({ onUploadSuccess }) {
       setError("");
       setMessage("Uploading and extracting URLs...");
 
-      const response = await axios.post(`${API_BASE_URL}/upload`, formData, {
+      const uploadUrl = `${API_BASE_URL}/upload`;
+      console.log("[FileUpload] POST", uploadUrl, "| file:", selectedFile.name);
+
+      const response = await axios.post(uploadUrl, formData, {
         headers: {
           "Content-Type": "multipart/form-data",
         },
       });
+
+      console.log("[FileUpload] Upload response status:", response.status);
+      console.log("[FileUpload] Upload response data:", response.data);
 
       onUploadSuccess(response.data);
       setMessage(`Loaded ${response.data.total} URL(s) from ${response.data.fileName}.`);
       setSelectedFile(null);
       resetFileInput();
     } catch (uploadError) {
-      setError(uploadError.response?.data?.message || "Upload failed. Please try again.");
+      console.error("[FileUpload] Upload ERROR:", uploadError.message);
+      console.error("[FileUpload] Upload error response:", uploadError.response);
+      setError(uploadError.response?.data?.message || `Upload failed — ${uploadError.message}`);
       setMessage("");
     } finally {
       setIsUploading(false);

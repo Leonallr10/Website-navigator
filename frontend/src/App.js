@@ -11,6 +11,7 @@ import { Card, CardContent } from "./components/ui/card";
 import { Separator } from "./components/ui/separator";
 
 const API_BASE_URL = (process.env.REACT_APP_API_URL || "http://localhost:5000").replace(/\/+$/, "");
+console.log("[App] API_BASE_URL resolved to:", API_BASE_URL);
 
 function App() {
   const [urls, setUrls] = useState([]);
@@ -27,13 +28,24 @@ function App() {
       setHistoryLoading(true);
       setHistoryError("");
 
-      const response = await axios.get(`${API_BASE_URL}/history`);
-      setHistorySessions(response.data.sessions || []);
+      const url = `${API_BASE_URL}/history`;
+      console.log("[loadHistory] GET", url);
+
+      const response = await axios.get(url);
+      console.log("[loadHistory] Response status:", response.status);
+      console.log("[loadHistory] Response data:", response.data);
+
+      const sessions = response.data.sessions || [];
+      console.log("[loadHistory] Sessions count:", sessions.length);
+      setHistorySessions(sessions);
     } catch (error) {
+      console.error("[loadHistory] ERROR:", error.message);
+      console.error("[loadHistory] Error response:", error.response);
+      console.error("[loadHistory] Error config (request details):", error.config);
       setHistorySessions([]);
       setHistoryError(
         error.response?.data?.message ||
-        "Unable to load saved history. Check your MongoDB connection."
+        `Unable to load history from ${API_BASE_URL}/history — ${error.message}`
       );
     } finally {
       setHistoryLoading(false);
@@ -49,6 +61,9 @@ function App() {
     fileName: uploadedFileName,
     savedSessionId,
   }) => {
+    console.log("[handleUploadSuccess] fileName:", uploadedFileName);
+    console.log("[handleUploadSuccess] URLs count:", uploadedUrls?.length);
+    console.log("[handleUploadSuccess] savedSessionId:", savedSessionId);
     setUrls(uploadedUrls);
     setCurrentIndex(0);
     setFileName(uploadedFileName);
@@ -65,6 +80,7 @@ function App() {
 
   const handleDeleteSession = async (session) => {
     if (!session?.id) {
+      console.warn("[handleDeleteSession] No session id, aborting.");
       return;
     }
 
@@ -72,7 +88,10 @@ function App() {
       setDeletingSessionId(session.id);
       setHistoryError("");
 
-      await axios.delete(`${API_BASE_URL}/history/${session.id}`);
+      const url = `${API_BASE_URL}/history/${session.id}`;
+      console.log("[handleDeleteSession] DELETE", url);
+      const res = await axios.delete(url);
+      console.log("[handleDeleteSession] Response status:", res.status);
 
       if (activeSessionId === session.id) {
         setUrls([]);
@@ -83,9 +102,11 @@ function App() {
 
       await loadHistory();
     } catch (error) {
+      console.error("[handleDeleteSession] ERROR:", error.message);
+      console.error("[handleDeleteSession] Error response:", error.response);
       setHistoryError(
         error.response?.data?.message ||
-        "Unable to delete the saved history entry. Please try again."
+        `Unable to delete session ${session.id} — ${error.message}`
       );
     } finally {
       setDeletingSessionId("");
